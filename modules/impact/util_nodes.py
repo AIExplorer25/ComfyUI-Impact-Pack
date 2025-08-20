@@ -10,7 +10,9 @@ import impact.core as core
 from server import PromptServer
 import inspect
 import logging
-
+import concurrent.futures
+import torch
+import comfy.utils
 
 class GeneralSwitch:
     @classmethod
@@ -376,13 +378,29 @@ class ImageListToImageBatch:
     def doit(self, images):
         if len(images) <= 1:
             return (images[0],)
-        else:
-            image1 = images[0]
-            for image2 in images[1:]:
-                if image1.shape[1:] != image2.shape[1:]:
-                    image2 = comfy.utils.common_upscale(image2.movedim(-1, 1), image1.shape[2], image1.shape[1], "lanczos", "center").movedim(1, -1)
-                image1 = torch.cat((image1, image2), dim=0)
-            return (image1,)
+    
+        ref_image = images[0]  # reference for size matching
+        target_h, target_w = ref_image.shape[1], ref_image.shape[2]
+    
+        def process_single(image):
+            """Resize if needed, return image with correct shape."""
+            if image.shape[1:] != ref_image.shape[1:]:
+                return comfy.utils.common_upscale(
+                    image.movedim(-1, 1),
+                    target_w,
+                    target_h,
+                    "lanczos",
+                    "center"
+                ).movedim(1, -1)
+            return image
+    
+        # Parallel resize
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            results = list(executor.map(process_single, images))
+    
+        # Concatenate all at once
+        merged = torch.cat(results, dim=0)
+        return (merged,)
 
 
 class ImageBatchToImageList:
